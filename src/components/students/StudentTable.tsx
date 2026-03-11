@@ -98,7 +98,13 @@ export function StudentTable({ students, onViewStudent, columnFilters, onColumnF
                       <Input
                         placeholder="Filter…"
                         value={columnFilters[col.key] || ""}
-                        onChange={(e) => onColumnFilterChange(col.key, e.target.value)}
+                       onChange={(e) => {
+                          let value = e.target.value;
+                          if (col.key === "semester") {
+                            value = value.replace(/[^0-9]/g, ""); 
+                          }
+                          onColumnFilterChange(col.key, value);
+                        }}
                         className="h-7 text-xs bg-white border-indigo-200 focus-visible:ring-indigo-300 placeholder:text-muted-foreground/50 font-normal"
                       />
                     </TableHead>
