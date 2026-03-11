@@ -1,7 +1,4 @@
-
-
 import { Student } from "./types";
-
 
 class PrefixIndex {
   private sortedTokens: string[] = [];
@@ -12,18 +9,10 @@ class PrefixIndex {
     this.sortedTokens = Array.from(tokenMap.keys()).sort();
   }
 
-  
   lookup(prefix: string): Set<number> {
-
-    if (this.tokenToIds.has(prefix)) {
-      const exact = this.tokenToIds.get(prefix)!;
-     
-    }
-
     const result = new Set<number>();
     const lo = this.lowerBound(prefix);
     const end = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
-
     for (let i = lo; i < this.sortedTokens.length; i++) {
       const tok = this.sortedTokens[i];
       if (tok >= end) break;
@@ -49,7 +38,6 @@ class PrefixIndex {
     this.tokenToIds.clear();
   }
 }
-
 
 export interface SearchParams {
   query?: string;
@@ -84,28 +72,19 @@ export interface SearchResult {
   };
 }
 
-
 class StudentSearchEngine {
   private students: Student[] = [];
-  private allIdxs: Set<number> = new Set(); 
+  private allIdxs: Set<number> = new Set();
   private invertedIndex: Map<string, Set<number>> = new Map();
-  
   private prefixIndex: PrefixIndex = new PrefixIndex();
-
   private deptIndex: Map<string, Set<number>> = new Map();
   private semesterIndex: Map<string, Set<number>> = new Map();
   private statusIndex: Map<string, Set<number>> = new Map();
   private courseIndex: Map<string, Set<number>> = new Map();
-
   private columnIndex: Map<keyof Student, Map<string, Set<number>>> = new Map();
-
-  // Facet caches
   private _facets: SearchResult["facets"] | null = null;
   private _stats: SearchResult["stats"] | null = null;
-
   private initialized = false;
-
-  // ─── Build Index ─────────────────────────────────────────────────────────
 
   build(students: Student[]) {
     console.time("[SearchEngine] build");
@@ -132,36 +111,27 @@ class StudentSearchEngine {
 
     for (let i = 0; i < students.length; i++) {
       const s = students[i];
+      this.allIdxs.add(i);
 
-      this.allIdxs.add(i);  // use array index, not s.id
-
-      // ── Full-text tokens ──
       const fullText = [
         s.rollNo, s.name, s.email, s.contact,
         s.course, s.department, s.subjects, s.status,
         String(s.semester),
       ].join(" ").toLowerCase();
 
-      const tokens = this.tokenize(fullText);
-      for (const token of tokens) {
-        if (!this.invertedIndex.has(token)) {
-          this.invertedIndex.set(token, new Set());
-        }
+      for (const token of this.tokenize(fullText)) {
+        if (!this.invertedIndex.has(token)) this.invertedIndex.set(token, new Set());
         this.invertedIndex.get(token)!.add(i);
       }
 
-      // ── Bitmap indexes ──
       this.addToBitmapIndex(this.deptIndex, s.department, i);
       this.addToBitmapIndex(this.semesterIndex, String(s.semester), i);
       this.addToBitmapIndex(this.statusIndex, s.status, i);
       this.addToBitmapIndex(this.courseIndex, s.course, i);
 
-      // ── Per-column indexes (minLen=1 so single-char filters work) ──
       for (const key of COLUMN_KEYS) {
         const colMap = this.columnIndex.get(key)!;
-        const val = String(s[key]).toLowerCase();
-        const colTokens = this.tokenize(val, 1);
-        for (const tok of colTokens) {
+        for (const tok of this.tokenize(String(s[key]).toLowerCase(), 1)) {
           if (!colMap.has(tok)) colMap.set(tok, new Set());
           colMap.get(tok)!.add(i);
         }
@@ -169,99 +139,54 @@ class StudentSearchEngine {
     }
 
     this.initialized = true;
-    // Build prefix index from the completed inverted index
     this.prefixIndex.build(this.invertedIndex);
     console.timeEnd("[SearchEngine] build");
     console.log(`[SearchEngine] Indexed ${students.length} students, ${this.invertedIndex.size} tokens`);
   }
 
-  // ─── Search ──────────────────────────────────────────────────────────────
-
   search(params: SearchParams): SearchResult {
-    if (!this.initialized) {
-      throw new Error("SearchEngine not initialized. Call build() first.");
-    }
+    if (!this.initialized) throw new Error("SearchEngine not initialized. Call build() first.");
 
     const {
-      query = "",
-      department = "",
-      semester = "",
-      status = "",
-      course = "",
-      columnFilters = {},
-      page = 1,
-      rowsPerPage = 10,
-      sortField,
-      sortDir = "asc",
+      query = "", department = "", semester = "", status = "", course = "",
+      columnFilters = {}, page = 1, rowsPerPage = 10, sortField, sortDir = "asc",
     } = params;
 
     let resultIdxs: Set<number> = this.allIdxs;
 
-    // ── Full-text search ──
-    if (query.trim()) {
-      const queryIdxs = this.searchText(query.trim().toLowerCase());
-      resultIdxs = this.intersect(resultIdxs, queryIdxs);
-    }
+    if (query.trim())  resultIdxs = this.intersect(resultIdxs, this.searchText(query.trim().toLowerCase()));
+    if (department)    resultIdxs = this.intersect(resultIdxs, this.deptIndex.get(department) ?? new Set());
+    if (semester)      resultIdxs = this.intersect(resultIdxs, this.semesterIndex.get(semester) ?? new Set());
+    if (status)        resultIdxs = this.intersect(resultIdxs, this.statusIndex.get(status) ?? new Set());
+    if (course)        resultIdxs = this.intersect(resultIdxs, this.courseIndex.get(course) ?? new Set());
 
-    // ── Categorical filters (bitmap lookup) ──
-    if (department) {
-      resultIdxs = this.intersect(resultIdxs, this.deptIndex.get(department) ?? new Set());
-    }
-    if (semester) {
-      resultIdxs = this.intersect(resultIdxs, this.semesterIndex.get(semester) ?? new Set());
-    }
-    if (status) {
-      resultIdxs = this.intersect(resultIdxs, this.statusIndex.get(status) ?? new Set());
-    }
-    if (course) {
-      resultIdxs = this.intersect(resultIdxs, this.courseIndex.get(course) ?? new Set());
-    }
-
-    // ── Column filters ──
+    const EXACT_COLS: (keyof Student)[] = ["semester", "id"];
     for (const [key, val] of Object.entries(columnFilters)) {
-      if (!val || !val.trim()) continue;
-      const colKey = key as keyof Student;
-      const colMap = this.columnIndex.get(colKey);
+      if (!val?.trim()) continue;
+      const colMap = this.columnIndex.get(key as keyof Student);
       if (!colMap) continue;
-      const colIdxs = this.searchColumnText(colMap, val.trim().toLowerCase());
-      resultIdxs = this.intersect(resultIdxs, colIdxs);
+      resultIdxs = this.intersect(
+        resultIdxs,
+        this.searchColumnText(colMap, val.trim().toLowerCase(), EXACT_COLS.includes(key as keyof Student))
+      );
     }
 
-    // ── Materialize matched students ──
     let matched: Student[] = [];
-    for (const idx of resultIdxs) {
-      matched.push(this.students[idx]);
-    }
+    for (const idx of resultIdxs) matched.push(this.students[idx]);
 
-    // ── Sort ──
-    if (sortField) {
-      matched = this.sort(matched, sortField, sortDir);
-    }
+    if (sortField) matched = this.sort(matched, sortField, sortDir);
 
-    // ── Paginate ──
     const total = matched.length;
     const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
     const safePage = Math.min(Math.max(1, page), totalPages);
-    const start = (safePage - 1) * rowsPerPage;
-    const data = matched.slice(start, start + rowsPerPage);
+    const data = matched.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
-    return {
-      data,
-      total,
-      page: safePage,
-      rowsPerPage,
-      totalPages,
-      facets: this.getFacets(),
-      stats: this.getStats(),
-    };
+    return { data, total, page: safePage, rowsPerPage, totalPages, facets: this.getFacets(), stats: this.getStats() };
   }
-
-  // ─── Full-text search using inverted index ────────────────────────────────
 
   private searchText(query: string): Set<number> {
     const tokens = this.tokenize(query);
     if (tokens.length === 0) return this.allIdxs;
-
     let result: Set<number> | null = null;
     for (const token of tokens) {
       const matches = this.prefixIndex.lookup(token);
@@ -271,20 +196,25 @@ class StudentSearchEngine {
     return result ?? this.allIdxs;
   }
 
-  private getTokenMatches(token: string): Set<number> {
-    return this.prefixIndex.lookup(token);
-  }
-
-  private searchColumnText(colMap: Map<string, Set<number>>, query: string): Set<number> {
-    const tokens = this.tokenize(query, 1);  // allow single-char filters
+  private searchColumnText(colMap: Map<string, Set<number>>, query: string, exact = false): Set<number> {
+    const tokens = this.tokenize(query, 1);
     if (tokens.length === 0) return this.allIdxs;
 
-    const colPrefixKey = "__prefixIndex__";
-    let colPrefix = (colMap as any)[colPrefixKey] as PrefixIndex | undefined;
+    if (exact) {
+      const result = new Set<number>();
+      for (const token of tokens) {
+        const ids = colMap.get(token);
+        if (ids) for (const id of ids) result.add(id);
+      }
+      return result;
+    }
+
+    const KEY = "__prefixIndex__";
+    let colPrefix = (colMap as any)[KEY] as PrefixIndex | undefined;
     if (!colPrefix) {
       colPrefix = new PrefixIndex();
       colPrefix.build(colMap);
-      (colMap as any)[colPrefixKey] = colPrefix;
+      (colMap as any)[KEY] = colPrefix;
     }
 
     let result: Set<number> | null = null;
@@ -295,8 +225,6 @@ class StudentSearchEngine {
     }
     return result ?? this.allIdxs;
   }
-
-  // ─── Helpers ─────────────────────────────────────────────────────────────
 
   private tokenize(text: string, minLen = 1): string[] {
     return text
@@ -312,12 +240,9 @@ class StudentSearchEngine {
   }
 
   private intersect(a: Set<number>, b: Set<number>): Set<number> {
-    // Always iterate the smaller set
     const [small, large] = a.size <= b.size ? [a, b] : [b, a];
     const result = new Set<number>();
-    for (const id of small) {
-      if (large.has(id)) result.add(id);
-    }
+    for (const id of small) if (large.has(id)) result.add(id);
     return result;
   }
 
@@ -354,41 +279,28 @@ class StudentSearchEngine {
     return this.students.find(s => s.id === id) ?? null;
   }
 
-  isReady() {
-    return this.initialized;
-  }
+  isReady() { return this.initialized; }
 
- 
-  invalidate() {
-    this.initialized = false;
-    console.log("[SearchEngine] Invalidated — will rebuild on next request");
-  }
+  invalidate() { this.initialized = false; }
 }
 
-
 declare global {
-
+  // eslint-disable-next-line no-var
   var __studentEngine: StudentSearchEngine | undefined;
   var __studentEngineFilePath: string | undefined;
   var __studentEngineMtime: number | undefined;
 }
 
 export function getSearchEngine(): StudentSearchEngine {
-  if (!global.__studentEngine) {
-    global.__studentEngine = new StudentSearchEngine();
-  }
+  if (!global.__studentEngine) global.__studentEngine = new StudentSearchEngine();
   return global.__studentEngine;
 }
 
-
 export function getEngineFileMeta(): { filePath: string | null; mtime: number } {
-  return {
-    filePath: global.__studentEngineFilePath ?? null,
-    mtime:    global.__studentEngineMtime   ?? 0,
-  };
+  return { filePath: global.__studentEngineFilePath ?? null, mtime: global.__studentEngineMtime ?? 0 };
 }
 
 export function setEngineFileMeta(filePath: string, mtime: number): void {
   global.__studentEngineFilePath = filePath;
-  global.__studentEngineMtime    = mtime;
+  global.__studentEngineMtime = mtime;
 }
