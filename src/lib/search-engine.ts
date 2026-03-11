@@ -1,20 +1,7 @@
-/**
- * StudentSearchEngine
- *
- * High-performance server-side search & filter engine designed for 100k+ records.
- *
- * Architecture:
- * - Inverted index: token → Set<id> for fast full-text lookup
- * - Bitmap index (Map<value, Set<id>>) for O(1) categorical filters
- * - Column-specific inverted indices for per-column text search
- * - All filtering is set-intersection — no row-by-row scanning
- * - Singleton pattern: built once at startup, reused across requests
- */
+
 
 import { Student } from "./types";
 
-// ─── Prefix Index (sorted token array + binary search) ───────────────────────
-// Replaces the O(n) linear scan with O(log n) binary search + contiguous slice.
 
 class PrefixIndex {
   private sortedTokens: string[] = [];
@@ -25,12 +12,12 @@ class PrefixIndex {
     this.sortedTokens = Array.from(tokenMap.keys()).sort();
   }
 
-  /** Returns union of all id-sets whose token starts with `prefix`. O(log n + k) */
+  
   lookup(prefix: string): Set<number> {
-    // Exact match fast path
+
     if (this.tokenToIds.has(prefix)) {
       const exact = this.tokenToIds.get(prefix)!;
-      // Still collect prefix matches too for completeness
+     
     }
 
     const result = new Set<number>();
@@ -63,7 +50,6 @@ class PrefixIndex {
   }
 }
 
-// ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface SearchParams {
   query?: string;
@@ -98,28 +84,20 @@ export interface SearchResult {
   };
 }
 
-// ─── Engine ─────────────────────────────────────────────────────────────────
 
 class StudentSearchEngine {
   private students: Student[] = [];
-  private allIds: Set<number> = new Set();
-
-  // Full-text inverted index: token → Set of student ids
+  private allIdxs: Set<number> = new Set(); 
   private invertedIndex: Map<string, Set<number>> = new Map();
-  // Fast prefix index built from invertedIndex
+  
   private prefixIndex: PrefixIndex = new PrefixIndex();
 
-  // Bitmap (categorical) indexes for O(1) filter lookup
   private deptIndex: Map<string, Set<number>> = new Map();
   private semesterIndex: Map<string, Set<number>> = new Map();
   private statusIndex: Map<string, Set<number>> = new Map();
   private courseIndex: Map<string, Set<number>> = new Map();
 
-  // Per-column inverted indexes for column filter feature
   private columnIndex: Map<keyof Student, Map<string, Set<number>>> = new Map();
-
-  // Id → array index for O(1) student lookup
-  private idToIndex: Map<number, number> = new Map();
 
   // Facet caches
   private _facets: SearchResult["facets"] | null = null;
@@ -132,7 +110,7 @@ class StudentSearchEngine {
   build(students: Student[]) {
     console.time("[SearchEngine] build");
     this.students = students;
-    this.allIds = new Set();
+    this.allIdxs = new Set();
     this.invertedIndex.clear();
     this.prefixIndex.clear();
     this.deptIndex.clear();
@@ -140,7 +118,6 @@ class StudentSearchEngine {
     this.statusIndex.clear();
     this.courseIndex.clear();
     this.columnIndex.clear();
-    this.idToIndex.clear();
     this._facets = null;
     this._stats = null;
 
@@ -155,10 +132,8 @@ class StudentSearchEngine {
 
     for (let i = 0; i < students.length; i++) {
       const s = students[i];
-      const id = s.id;
 
-      this.allIds.add(id);
-      this.idToIndex.set(id, i);
+      this.allIdxs.add(i);  // use array index, not s.id
 
       // ── Full-text tokens ──
       const fullText = [
@@ -172,23 +147,23 @@ class StudentSearchEngine {
         if (!this.invertedIndex.has(token)) {
           this.invertedIndex.set(token, new Set());
         }
-        this.invertedIndex.get(token)!.add(id);
+        this.invertedIndex.get(token)!.add(i);
       }
 
       // ── Bitmap indexes ──
-      this.addToBitmapIndex(this.deptIndex, s.department, id);
-      this.addToBitmapIndex(this.semesterIndex, String(s.semester), id);
-      this.addToBitmapIndex(this.statusIndex, s.status, id);
-      this.addToBitmapIndex(this.courseIndex, s.course, id);
+      this.addToBitmapIndex(this.deptIndex, s.department, i);
+      this.addToBitmapIndex(this.semesterIndex, String(s.semester), i);
+      this.addToBitmapIndex(this.statusIndex, s.status, i);
+      this.addToBitmapIndex(this.courseIndex, s.course, i);
 
-      // ── Per-column indexes ──
+      // ── Per-column indexes (minLen=1 so single-char filters work) ──
       for (const key of COLUMN_KEYS) {
         const colMap = this.columnIndex.get(key)!;
         const val = String(s[key]).toLowerCase();
-        const colTokens = this.tokenize(val);
+        const colTokens = this.tokenize(val, 1);
         for (const tok of colTokens) {
           if (!colMap.has(tok)) colMap.set(tok, new Set());
-          colMap.get(tok)!.add(id);
+          colMap.get(tok)!.add(i);
         }
       }
     }
@@ -220,27 +195,26 @@ class StudentSearchEngine {
       sortDir = "asc",
     } = params;
 
-    // Start with all IDs — intersect returns a new Set each time so allIds is never mutated
-    let resultIds: Set<number> = this.allIds;
+    let resultIdxs: Set<number> = this.allIdxs;
 
     // ── Full-text search ──
     if (query.trim()) {
-      const queryIds = this.searchText(query.trim().toLowerCase());
-      resultIds = this.intersect(resultIds, queryIds);
+      const queryIdxs = this.searchText(query.trim().toLowerCase());
+      resultIdxs = this.intersect(resultIdxs, queryIdxs);
     }
 
     // ── Categorical filters (bitmap lookup) ──
     if (department) {
-      resultIds = this.intersect(resultIds, this.deptIndex.get(department) ?? new Set());
+      resultIdxs = this.intersect(resultIdxs, this.deptIndex.get(department) ?? new Set());
     }
     if (semester) {
-      resultIds = this.intersect(resultIds, this.semesterIndex.get(semester) ?? new Set());
+      resultIdxs = this.intersect(resultIdxs, this.semesterIndex.get(semester) ?? new Set());
     }
     if (status) {
-      resultIds = this.intersect(resultIds, this.statusIndex.get(status) ?? new Set());
+      resultIdxs = this.intersect(resultIdxs, this.statusIndex.get(status) ?? new Set());
     }
     if (course) {
-      resultIds = this.intersect(resultIds, this.courseIndex.get(course) ?? new Set());
+      resultIdxs = this.intersect(resultIdxs, this.courseIndex.get(course) ?? new Set());
     }
 
     // ── Column filters ──
@@ -249,16 +223,14 @@ class StudentSearchEngine {
       const colKey = key as keyof Student;
       const colMap = this.columnIndex.get(colKey);
       if (!colMap) continue;
-
-      const colIds = this.searchColumnText(colMap, val.trim().toLowerCase());
-      resultIds = this.intersect(resultIds, colIds);
+      const colIdxs = this.searchColumnText(colMap, val.trim().toLowerCase());
+      resultIdxs = this.intersect(resultIdxs, colIdxs);
     }
 
     // ── Materialize matched students ──
     let matched: Student[] = [];
-    for (const id of resultIds) {
-      const idx = this.idToIndex.get(id);
-      if (idx !== undefined) matched.push(this.students[idx]);
+    for (const idx of resultIdxs) {
+      matched.push(this.students[idx]);
     }
 
     // ── Sort ──
@@ -288,7 +260,7 @@ class StudentSearchEngine {
 
   private searchText(query: string): Set<number> {
     const tokens = this.tokenize(query);
-    if (tokens.length === 0) return this.allIds; // no clone — read-only
+    if (tokens.length === 0) return this.allIdxs;
 
     let result: Set<number> | null = null;
     for (const token of tokens) {
@@ -296,7 +268,7 @@ class StudentSearchEngine {
       result = result === null ? matches : this.intersect(result, matches);
       if (result.size === 0) return result;
     }
-    return result ?? this.allIds;
+    return result ?? this.allIdxs;
   }
 
   private getTokenMatches(token: string): Set<number> {
@@ -304,10 +276,9 @@ class StudentSearchEngine {
   }
 
   private searchColumnText(colMap: Map<string, Set<number>>, query: string): Set<number> {
-    const tokens = this.tokenize(query);
-    if (tokens.length === 0) return this.allIds;
+    const tokens = this.tokenize(query, 1);  // allow single-char filters
+    if (tokens.length === 0) return this.allIdxs;
 
-    // Build a per-column prefix index on demand (cached on the map itself)
     const colPrefixKey = "__prefixIndex__";
     let colPrefix = (colMap as any)[colPrefixKey] as PrefixIndex | undefined;
     if (!colPrefix) {
@@ -322,17 +293,17 @@ class StudentSearchEngine {
       result = result === null ? matches : this.intersect(result, matches);
       if (result.size === 0) return result;
     }
-    return result ?? this.allIds;
+    return result ?? this.allIdxs;
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
-  private tokenize(text: string): string[] {
+  private tokenize(text: string, minLen = 1): string[] {
     return text
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, " ")
       .split(/\s+/)
-      .filter((t) => t.length >= 2);
+      .filter((t) => t.length >= minLen);
   }
 
   private addToBitmapIndex(index: Map<string, Set<number>>, key: string, id: number) {
@@ -380,28 +351,23 @@ class StudentSearchEngine {
   }
 
   getStudentById(id: number): Student | null {
-    const idx = this.idToIndex.get(id);
-    return idx !== undefined ? this.students[idx] : null;
+    return this.students.find(s => s.id === id) ?? null;
   }
 
   isReady() {
     return this.initialized;
   }
 
-  /** Force a full rebuild on the next request (used by the reload API). */
+ 
   invalidate() {
     this.initialized = false;
     console.log("[SearchEngine] Invalidated — will rebuild on next request");
   }
 }
 
-// ─── Singleton ───────────────────────────────────────────────────────────────
-// Node.js module caching keeps this alive across requests in the same process.
-// We also attach loadedFilePath/mtime to the global so they survive
-// Next.js hot-module reloads in dev (which re-execute this module but keep `global`).
 
 declare global {
-  // eslint-disable-next-line no-var
+
   var __studentEngine: StudentSearchEngine | undefined;
   var __studentEngineFilePath: string | undefined;
   var __studentEngineMtime: number | undefined;
@@ -414,7 +380,7 @@ export function getSearchEngine(): StudentSearchEngine {
   return global.__studentEngine;
 }
 
-/** Read back the persisted file tracking state from the global. */
+
 export function getEngineFileMeta(): { filePath: string | null; mtime: number } {
   return {
     filePath: global.__studentEngineFilePath ?? null,
@@ -422,7 +388,6 @@ export function getEngineFileMeta(): { filePath: string | null; mtime: number } 
   };
 }
 
-/** Persist file tracking state to the global so it survives hot reloads. */
 export function setEngineFileMeta(filePath: string, mtime: number): void {
   global.__studentEngineFilePath = filePath;
   global.__studentEngineMtime    = mtime;
