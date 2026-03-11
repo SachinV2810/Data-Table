@@ -102,7 +102,7 @@ class StudentSearchEngine {
 
     const COLUMN_KEYS: (keyof Student)[] = [
       "rollNo", "name", "email", "contact", "course",
-      "department", "subjects", "status",
+      "department", "subjects", "status", "semester",
     ];
 
     for (const key of COLUMN_KEYS) {
