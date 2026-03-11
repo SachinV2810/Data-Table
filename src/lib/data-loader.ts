@@ -1,17 +1,4 @@
-/**
- * Data loader — loads student JSON and seeds the search engine.
- *
- * Hot-reload behaviour:
- * - Tracks the file's mtime (last-modified time) via globals so it survives
- *   Next.js hot-module reloads in dev (which re-execute modules but keep `global`).
- * - On every API request, checks if mtime changed → rebuilds automatically.
- * - A mutex (rebuildPromise) prevents duplicate concurrent rebuilds.
- *
- * Why globals instead of module-level variables?
- * Next.js dev mode re-executes module files on hot reload, resetting any
- * module-level `let` variables to their initial values. Storing state on
- * `global` survives this and correctly tracks whether the file changed.
- */
+
 
 import path from "path";
 import fs from "fs";
@@ -22,6 +9,9 @@ import { getSearchEngine, getEngineFileMeta, setEngineFileMeta } from "./search-
 const DATA_CANDIDATES = [
   path.join(process.cwd(), "src/data/students-100k.json"),
   path.join(process.cwd(), "src/data/students.json"),
+  // Vercel bundles files relative to project root
+  path.join(process.cwd(), ".next/server/src/data/students-100k.json"),
+  path.join(process.cwd(), ".next/server/src/data/students.json"),
 ];
 
 let rebuildPromise: Promise<void> | null = null;
