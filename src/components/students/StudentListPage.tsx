@@ -1,19 +1,19 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Student, FilterState } from "@/lib/types";
 import { useStudents } from "@/hooks/useStudents";
 import { SearchBar } from "./SearchBar";
 import { FilterBar } from "./FilterBar";
 import { ActionBar } from "./ActionBar";
-import { StudentTable } from "./StudentTable";
-import { Pagination } from "./Pagination";
 import { StudentDetailModal } from "./StudentDetailModal";
 import { StatsCards } from "./StatsCards";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { GraduationCap, SlidersHorizontal, X, Loader2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ColumnDef, PaginatedTable } from "@/components/shared/PaginatedTable";
+import { ExternalLink, GraduationCap, Loader2, SlidersHorizontal, X } from "lucide-react";
 
 export function StudentListPage() {
   const [query, setQuery]             = useState("");
@@ -26,7 +26,7 @@ export function StudentListPage() {
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
-  const { data, total, totalPages, facets, stats, isLoading, error } = useStudents({
+  const { data, total, facets, stats, isLoading, error } = useStudents({
     query, filters, columnFilters, page, rowsPerPage, sortField, sortDir,
   });
 
@@ -42,6 +42,81 @@ export function StudentListPage() {
 
   const hasActiveFilters = !!query || !!filters.department || !!filters.semester || !!filters.status || !!filters.course || Object.values(columnFilters).some(v => v);
   const activeFilterCount = [query, filters.department, filters.semester, filters.status, filters.course, ...Object.values(columnFilters)].filter(Boolean).length;
+
+  const columns = useMemo<ColumnDef<Student>[]>(() => {
+    const semColors: Record<number, string> = {
+      1: "bg-amber-100 text-amber-700",
+      2: "bg-sky-100 text-sky-700",
+      3: "bg-rose-100 text-rose-700",
+      4: "bg-teal-100 text-teal-700",
+      5: "bg-orange-100 text-orange-700",
+      6: "bg-indigo-100 text-indigo-700",
+    };
+
+    return [
+      {
+        key: "rollNo",
+        header: "Roll No",
+        sortable: true,
+        filterable: true,
+        cell: (student) => (
+          <span className="font-mono text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md whitespace-nowrap">
+            {student.rollNo}
+          </span>
+        ),
+      },
+      { key: "course", header: "Course", sortable: true, filterable: true, cellClassName: "font-medium text-sm", cell: (student) => student.course },
+      {
+        key: "department",
+        header: "Department",
+        sortable: true,
+        filterable: true,
+        cell: (student) => <Badge variant={student.department === "Science" ? "info" : student.department === "Commerce" ? "success" : "purple"}>{student.department}</Badge>,
+      },
+      {
+        key: "semester",
+        header: "Sem",
+        sortable: true,
+        filterable: true,
+        filterType: "number",
+        cell: (student) => (
+          <span className={`inline-flex w-7 h-7 rounded-full text-xs font-bold items-center justify-center ${semColors[student.semester] || "bg-gray-100 text-gray-600"}`}>
+            {student.semester}
+          </span>
+        ),
+      },
+      { key: "name", header: "Name", sortable: true, filterable: true, cellClassName: "font-semibold text-sm whitespace-nowrap", cell: (student) => student.name },
+      { key: "email", header: "Email", filterable: true, cellClassName: "text-[var(--color-muted-foreground)] text-xs", cell: (student) => student.email },
+      { key: "contact", header: "Contact", filterable: true, cellClassName: "font-mono text-xs text-[var(--color-muted-foreground)]", cell: (student) => student.contact },
+      {
+        key: "status",
+        header: "Status",
+        sortable: true,
+        filterable: true,
+        cell: (student) => (
+          <Badge variant={student.status === "Active" ? "success" : "destructive"} className="gap-1">
+            <span className={`w-1.5 h-1.5 rounded-full ${student.status === "Active" ? "bg-emerald-500" : "bg-red-500"}`} />
+            {student.status}
+          </Badge>
+        ),
+      },
+      {
+        key: "actions",
+        header: "View",
+        headerClassName: "w-16",
+        cell: (student) => (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-[var(--color-muted-foreground)] hover:text-indigo-600 hover:bg-indigo-50" onClick={() => setSelectedStudent(student)}>
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>View details</TooltipContent>
+          </Tooltip>
+        ),
+      },
+    ];
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/20 to-violet-50/10">
@@ -134,25 +209,26 @@ export function StudentListPage() {
           )}
 
           <CardContent className="p-0">
-            <StudentTable
-              students={data}
-              onViewStudent={setSelectedStudent}
-              columnFilters={columnFilters}
-              onColumnFilterChange={handleColumnFilterChange}
-              sortField={sortField}
-              sortDir={sortDir}
-              onSort={handleSort}
-              isLoading={isLoading}
-            />
+            <TooltipProvider>
+              <PaginatedTable<Student>
+                columns={columns}
+                data={data}
+                loading={isLoading}
+                pageIndex={page}
+                pageSize={rowsPerPage}
+                setPageIndex={setPage}
+                setPageSize={setRowsPerPage}
+                total={total}
+                sortField={sortField}
+                sortDir={sortDir}
+                onSort={handleSort}
+                columnFilters={columnFilters}
+                onColumnFilterChange={handleColumnFilterChange}
+                rowKey={(student) => student.id}
+                emptyTitle="No students found"
+              />
+            </TooltipProvider>
           </CardContent>
-
-          <div className="no-print">
-            <Pagination
-              total={total} page={page} rowsPerPage={rowsPerPage} totalPages={totalPages}
-              onPageChange={setPage}
-              onRowsPerPageChange={(r) => { setRowsPerPage(r); setPage(1); }}
-            />
-          </div>
         </Card>
       </div>
 
