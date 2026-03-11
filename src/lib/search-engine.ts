@@ -153,10 +153,12 @@ class StudentSearchEngine {
     } = params;
 
     let resultIdxs: Set<number> = this.allIdxs;
+    const semesterKey = semester ? String(semester) : "";
+
 
     if (query.trim())  resultIdxs = this.intersect(resultIdxs, this.searchText(query.trim().toLowerCase()));
     if (department)    resultIdxs = this.intersect(resultIdxs, this.deptIndex.get(department) ?? new Set());
-    if (semester)      resultIdxs = this.intersect(resultIdxs, this.semesterIndex.get(semester) ?? new Set());
+    if (semesterKey)      resultIdxs = this.intersect(resultIdxs, this.semesterIndex.get(semesterKey) ?? new Set());
     if (status)        resultIdxs = this.intersect(resultIdxs, this.statusIndex.get(status) ?? new Set());
     if (course)        resultIdxs = this.intersect(resultIdxs, this.courseIndex.get(course) ?? new Set());
 
