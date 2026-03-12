@@ -2,9 +2,10 @@
 import { Users, UserCheck, UserX, Building2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { SearchResult } from "@/lib/search-engine";
+import { Student } from "@/lib/types";
 
 interface StatsCardsProps {
-  stats: SearchResult["stats"];
+  stats: SearchResult<Student>["stats"];
   filteredCount: number;
 }
 
