@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Student, FilterState } from "@/lib/types";
+import { Student, FilterState } from "@/lib/student-types";
 import { SearchResult } from "@/lib/search-engine";
 
 export interface UseStudentsParams {
@@ -17,8 +17,8 @@ export interface UseStudentsResult {
   data: Student[];
   total: number;
   totalPages: number;
-  facets: SearchResult["facets"] | null;
-  stats: SearchResult["stats"] | null;
+  facets: SearchResult<Student>["facets"] | null;
+  stats: SearchResult<Student>["stats"] | null;
   isLoading: boolean;
   error: string | null;
 }
@@ -47,18 +47,17 @@ export function useStudents(params: UseStudentsParams): UseStudentsResult {
   const [data, setData] = useState<Student[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const [facets, setFacets] = useState<SearchResult["facets"] | null>(null);
-  const [stats, setStats] = useState<SearchResult["stats"] | null>(null);
+  const [facets, setFacets] = useState<SearchResult<Student>["facets"] | null>(null);
+  const [stats, setStats] = useState<SearchResult<Student>["stats"] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Debounce ref to avoid firing on every keystroke
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
   const abortController = useRef<AbortController | null>(null);
 
   const fetchData = useCallback(
     (p: UseStudentsParams) => {
-      // Cancel in-flight request
+    
       abortController.current?.abort();
       abortController.current = new AbortController();
 
@@ -72,7 +71,7 @@ export function useStudents(params: UseStudentsParams): UseStudentsResult {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json();
         })
-        .then((result: SearchResult) => {
+        .then((result: SearchResult<Student>) => {
           setData(result.data);
           setTotal(result.total);
           setTotalPages(result.totalPages);
@@ -81,7 +80,7 @@ export function useStudents(params: UseStudentsParams): UseStudentsResult {
           setIsLoading(false);
         })
         .catch((err) => {
-          if (err.name === "AbortError") return; // Cancelled — ignore
+          if (err.name === "AbortError") return; 
           setError(String(err.message ?? err));
           setIsLoading(false);
         });
@@ -90,14 +89,14 @@ export function useStudents(params: UseStudentsParams): UseStudentsResult {
   );
 
   useEffect(() => {
-    // Debounce text inputs (search / column filters) by 300ms
+  
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => fetchData(params), 120);
 
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  
   }, [
     params.query,
     params.filters.department,

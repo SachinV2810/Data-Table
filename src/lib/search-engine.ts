@@ -1,4 +1,5 @@
-import { Student } from "./types";
+import { EngineIndexes } from "./engine-types";
+
 
 class PrefixIndex {
   private sortedTokens: string[] = [];
@@ -11,13 +12,14 @@ class PrefixIndex {
 
   lookup(prefix: string): Set<number> {
     const result = new Set<number>();
-    const lo = this.lowerBound(prefix);
+    const lo  = this.lowerBound(prefix);
     const end = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
     for (let i = lo; i < this.sortedTokens.length; i++) {
       const tok = this.sortedTokens[i];
       if (tok >= end) break;
       if (tok.startsWith(prefix)) {
-        for (const id of this.tokenToIds.get(tok)!) result.add(id);
+        const ids = this.tokenToIds.get(tok)!;
+        ids.forEach((id) => result.add(id));
       }
     }
     return result;
@@ -27,282 +29,274 @@ class PrefixIndex {
     let lo = 0, hi = this.sortedTokens.length;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1;
-      if (this.sortedTokens[mid] < prefix) lo = mid + 1;
-      else hi = mid;
+      if (this.sortedTokens[mid] < prefix) lo = mid + 1; else hi = mid;
     }
     return lo;
   }
 
-  clear() {
-    this.sortedTokens = [];
-    this.tokenToIds.clear();
-  }
+  clear() { this.sortedTokens = []; this.tokenToIds.clear(); }
 }
+
+
 
 export interface SearchParams {
-  query?: string;
-  department?: string;
-  semester?: string;
-  status?: string;
-  course?: string;
-  columnFilters?: Partial<Record<keyof Student, string>>;
-  page?: number;
-  rowsPerPage?: number;
-  sortField?: keyof Student;
-  sortDir?: "asc" | "desc";
+  query?:        string;
+  filters?:      Record<string, string>;
+  columnFilters?: Record<string, string>;
+  exactCols?:    string[];
+  page?:         number;
+  rowsPerPage?:  number;
+  sortField?:    string;
+  sortDir?:      "asc" | "desc";
 }
 
-export interface SearchResult {
-  data: Student[];
-  total: number;
-  page: number;
+export interface SearchResult<T> {
+  data:       T[];
+  total:      number;
+  page:       number;
   rowsPerPage: number;
   totalPages: number;
-  facets: {
-    departments: string[];
-    semesters: string[];
-    statuses: string[];
-    courses: string[];
-  };
-  stats: {
-    total: number;
-    active: number;
-    inactive: number;
-    departments: number;
-  };
+  facets:     Record<string, string[]>;
+  stats:      Record<string, number>;
 }
 
-class StudentSearchEngine {
-  private students: Student[] = [];
-  private allIdxs: Set<number> = new Set();
+export interface EngineConfig<T> {
+
+  searchFields: (keyof T)[];
+  facetFields: (keyof T)[];
+  columnFields: (keyof T)[];
+  exactMatchFields?: (keyof T)[];
+  facetSort?: Partial<Record<string, "alpha" | "numeric">>;
+
+ 
+  stats: Record<string, (indexes: EngineIndexes<T>) => number>;
+}
+
+
+export class GenericSearchEngine<T extends Record<string, unknown>> {
+  private records:       T[]      = [];
+  private allIdxs:       Set<number> = new Set();
   private invertedIndex: Map<string, Set<number>> = new Map();
-  private prefixIndex: PrefixIndex = new PrefixIndex();
-  private deptIndex: Map<string, Set<number>> = new Map();
-  private semesterIndex: Map<string, Set<number>> = new Map();
-  private statusIndex: Map<string, Set<number>> = new Map();
-  private courseIndex: Map<string, Set<number>> = new Map();
-  private columnIndex: Map<keyof Student, Map<string, Set<number>>> = new Map();
-  private _facets: SearchResult["facets"] | null = null;
-  private _stats: SearchResult["stats"] | null = null;
+  private prefixIndex:   PrefixIndex = new PrefixIndex();
+
+  private facetIndex:    Map<string, Map<string, Set<number>>> = new Map();
+  private columnIndex:   Map<string, Map<string, Set<number>>> = new Map();
+
+  private _facets: Record<string, string[]> | null = null;
+  private _stats:  Record<string, number>  | null = null;
+
+  private config!: EngineConfig<T>;
   private initialized = false;
 
-  build(students: Student[]) {
+
+  build(records: T[], config: EngineConfig<T>) {
     console.time("[SearchEngine] build");
-    this.students = students;
-    this.allIdxs = new Set();
+
+    this.config        = config;
+    this.records       = records;
+    this.allIdxs       = new Set();
+    this._facets       = null;
+    this._stats        = null;
     this.invertedIndex.clear();
     this.prefixIndex.clear();
-    this.deptIndex.clear();
-    this.semesterIndex.clear();
-    this.statusIndex.clear();
-    this.courseIndex.clear();
+    this.facetIndex.clear();
     this.columnIndex.clear();
-    this._facets = null;
-    this._stats = null;
 
-    const COLUMN_KEYS: (keyof Student)[] = [
-      "rollNo", "name", "email", "contact", "course",
-      "department", "subjects", "status", "semester",
-    ];
+    for (const key of config.facetFields)  this.facetIndex.set(String(key),  new Map());
+    for (const key of config.columnFields) this.columnIndex.set(String(key), new Map());
 
-    for (const key of COLUMN_KEYS) {
-      this.columnIndex.set(key, new Map());
-    }
-
-    for (let i = 0; i < students.length; i++) {
-      const s = students[i];
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
       this.allIdxs.add(i);
 
-      const fullText = [
-        s.rollNo, s.name, s.email, s.contact,
-        s.course, s.department, s.subjects, s.status,
-        String(s.semester),
-      ].join(" ").toLowerCase();
-
-      for (const token of this.tokenize(fullText)) {
-        if (!this.invertedIndex.has(token)) this.invertedIndex.set(token, new Set());
-        this.invertedIndex.get(token)!.add(i);
+      const text = config.searchFields.map((f) => String(r[f] ?? "")).join(" ").toLowerCase();
+      for (const tok of this.tokenize(text)) {
+        if (!this.invertedIndex.has(tok)) this.invertedIndex.set(tok, new Set());
+        this.invertedIndex.get(tok)!.add(i);
       }
 
-      this.addToBitmapIndex(this.deptIndex, s.department, i);
-      this.addToBitmapIndex(this.semesterIndex, String(s.semester), i);
-      this.addToBitmapIndex(this.statusIndex, s.status, i);
-      this.addToBitmapIndex(this.courseIndex, s.course, i);
+      for (const key of config.facetFields) {
+        const k   = String(key);
+        const val = String(r[key] ?? "");
+        const map = this.facetIndex.get(k)!;
+        if (!map.has(val)) map.set(val, new Set());
+        map.get(val)!.add(i);
+      }
 
-      for (const key of COLUMN_KEYS) {
-        const colMap = this.columnIndex.get(key)!;
-        for (const tok of this.tokenize(String(s[key]).toLowerCase(), 1)) {
+      for (const key of config.columnFields) {
+        const k      = String(key);
+        const colMap = this.columnIndex.get(k)!;
+        for (const tok of this.tokenize(String(r[key] ?? ""), 1)) {
           if (!colMap.has(tok)) colMap.set(tok, new Set());
           colMap.get(tok)!.add(i);
         }
       }
     }
 
-    this.initialized = true;
     this.prefixIndex.build(this.invertedIndex);
+    this.initialized = true;
+
     console.timeEnd("[SearchEngine] build");
-    console.log(`[SearchEngine] Indexed ${students.length} students, ${this.invertedIndex.size} tokens`);
+    console.log(`[SearchEngine] Indexed ${records.length} records, ${this.invertedIndex.size} tokens`);
   }
 
-  search(params: SearchParams): SearchResult {
-    if (!this.initialized) throw new Error("SearchEngine not initialized. Call build() first.");
+  
+
+  search(params: SearchParams): SearchResult<T> {
+    if (!this.initialized) throw new Error("Engine not initialized — call build() first.");
 
     const {
-      query = "", department = "", semester = "", status = "", course = "",
-      columnFilters = {}, page = 1, rowsPerPage = 10, sortField, sortDir = "asc",
+      query        = "",
+      filters      = {},
+      columnFilters = {},
+      exactCols    = this.config.exactMatchFields?.map(String) ?? [],
+      page         = 1,
+      rowsPerPage  = 10,
+      sortField,
+      sortDir      = "asc",
     } = params;
 
-    let resultIdxs: Set<number> = this.allIdxs;
-    const semesterKey = semester ? String(semester) : "";
+    let result: Set<number> = this.allIdxs;
 
+    if (query.trim()) result = this.intersect(result, this.searchText(query.trim().toLowerCase()));
 
-    if (query.trim())  resultIdxs = this.intersect(resultIdxs, this.searchText(query.trim().toLowerCase()));
-    if (department)    resultIdxs = this.intersect(resultIdxs, this.deptIndex.get(department) ?? new Set());
-    if (semesterKey)      resultIdxs = this.intersect(resultIdxs, this.semesterIndex.get(semesterKey) ?? new Set());
-    if (status)        resultIdxs = this.intersect(resultIdxs, this.statusIndex.get(status) ?? new Set());
-    if (course)        resultIdxs = this.intersect(resultIdxs, this.courseIndex.get(course) ?? new Set());
-
-    const EXACT_COLS: (keyof Student)[] = ["semester", "id"];
-    for (const [key, val] of Object.entries(columnFilters)) {
-      if (!val?.trim()) continue;
-      const colMap = this.columnIndex.get(key as keyof Student);
-      if (!colMap) continue;
-      resultIdxs = this.intersect(
-        resultIdxs,
-        this.searchColumnText(colMap, val.trim().toLowerCase(), EXACT_COLS.includes(key as keyof Student))
-      );
+    
+    for (const [key, val] of Object.entries(filters)) {
+      if (!val) continue;
+      const map = this.facetIndex.get(key);
+      result = this.intersect(result, map?.get(val) ?? new Set());
     }
 
-    let matched: Student[] = [];
-    for (const idx of resultIdxs) matched.push(this.students[idx]);
+ 
+    for (const [key, val] of Object.entries(columnFilters)) {
+      if (!val?.trim()) continue;
+      const colMap = this.columnIndex.get(key);
+      if (!colMap) continue;
+      const exact = exactCols.includes(key);
+      result = this.intersect(result, this.searchColumnText(colMap, val.trim().toLowerCase(), exact));
+    }
 
-    if (sortField) matched = this.sort(matched, sortField, sortDir);
+  
+    let matched: T[] = [];
+    result.forEach((idx) => matched.push(this.records[idx]));
 
-    const total = matched.length;
+   
+    if (sortField) {
+      matched = [...matched].sort((a, b) => {
+        const cmp = String(a[sortField] ?? "").localeCompare(String(b[sortField] ?? ""), undefined, { numeric: true });
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+    }
+
+
+    const total      = matched.length;
     const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, page), totalPages);
-    const data = matched.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
+    const safePage   = Math.min(Math.max(1, page), totalPages);
+    const data       = matched.slice((safePage - 1) * rowsPerPage, safePage * rowsPerPage);
 
     return { data, total, page: safePage, rowsPerPage, totalPages, facets: this.getFacets(), stats: this.getStats() };
   }
 
-  private searchText(query: string): Set<number> {
-    const tokens = this.tokenize(query);
-    if (tokens.length === 0) return this.allIdxs;
-    let result: Set<number> | null = null;
-    for (const token of tokens) {
-      const matches = this.prefixIndex.lookup(token);
-      result = result === null ? matches : this.intersect(result, matches);
-      if (result.size === 0) return result;
-    }
-    return result ?? this.allIdxs;
+  findById(id: unknown, idField: keyof T = "id" as keyof T): T | null {
+    return this.records.find((r) => r[idField] === id) ?? null;
   }
 
-  private searchColumnText(colMap: Map<string, Set<number>>, query: string, exact = false): Set<number> {
+ 
+
+  private searchText(query: string): Set<number> {
+    const tokens = this.tokenize(query);
+    if (!tokens.length) return this.allIdxs;
+    let res: Set<number> | null = null;
+    for (const tok of tokens) {
+      const m = this.prefixIndex.lookup(tok);
+      res = res === null ? m : this.intersect(res, m);
+      if (res.size === 0) return res;
+    }
+    return res ?? this.allIdxs;
+  }
+
+  private searchColumnText(colMap: Map<string, Set<number>>, query: string, exact: boolean): Set<number> {
     const tokens = this.tokenize(query, 1);
-    if (tokens.length === 0) return this.allIdxs;
+    if (!tokens.length) return this.allIdxs;
 
     if (exact) {
-      const result = new Set<number>();
-      for (const token of tokens) {
-        const ids = colMap.get(token);
-        if (ids) for (const id of ids) result.add(id);
-      }
-      return result;
+      const res = new Set<number>();
+      tokens.forEach((tok) => {
+        const ids = colMap.get(tok);
+        if (ids) ids.forEach((id) => res.add(id));
+      });
+      return res;
     }
 
-    const KEY = "__prefixIndex__";
-    let colPrefix = (colMap as any)[KEY] as PrefixIndex | undefined;
-    if (!colPrefix) {
-      colPrefix = new PrefixIndex();
-      colPrefix.build(colMap);
-      (colMap as any)[KEY] = colPrefix;
-    }
+    const KEY = "__px__";
+    let px = (colMap as any)[KEY] as PrefixIndex | undefined;
+    if (!px) { px = new PrefixIndex(); px.build(colMap); (colMap as any)[KEY] = px; }
 
-    let result: Set<number> | null = null;
-    for (const token of tokens) {
-      const matches = colPrefix.lookup(token);
-      result = result === null ? matches : this.intersect(result, matches);
-      if (result.size === 0) return result;
+    let res: Set<number> | null = null;
+    for (const tok of tokens) {
+      const m = px.lookup(tok);
+      res = res === null ? m : this.intersect(res, m);
+      if (res.size === 0) return res;
     }
-    return result ?? this.allIdxs;
+    return res ?? this.allIdxs;
   }
 
   private tokenize(text: string, minLen = 1): string[] {
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((t) => t.length >= minLen);
-  }
-
-  private addToBitmapIndex(index: Map<string, Set<number>>, key: string, id: number) {
-    if (!index.has(key)) index.set(key, new Set());
-    index.get(key)!.add(id);
+    return text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((t) => t.length >= minLen);
   }
 
   private intersect(a: Set<number>, b: Set<number>): Set<number> {
     const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-    const result = new Set<number>();
-    for (const id of small) if (large.has(id)) result.add(id);
-    return result;
-  }
-
-  private sort(students: Student[], field: keyof Student, dir: "asc" | "desc"): Student[] {
-    return [...students].sort((a, b) => {
-      const cmp = String(a[field]).localeCompare(String(b[field]), undefined, { numeric: true });
-      return dir === "asc" ? cmp : -cmp;
+    const res = new Set<number>();
+    small.forEach((id) => {
+      if (large.has(id)) res.add(id);
     });
+    return res;
   }
 
-  private getFacets(): SearchResult["facets"] {
+  private getFacets(): Record<string, string[]> {
     if (this._facets) return this._facets;
-    this._facets = {
-      departments: Array.from(this.deptIndex.keys()).sort(),
-      semesters: Array.from(this.semesterIndex.keys()).sort((a, b) => Number(a) - Number(b)),
-      statuses: Array.from(this.statusIndex.keys()).sort(),
-      courses: Array.from(this.courseIndex.keys()).sort(),
-    };
-    return this._facets;
+    const facets: Record<string, string[]> = {};
+    this._facets = facets;
+    this.facetIndex.forEach((map, key) => {
+      const sort = this.config.facetSort?.[key] ?? "alpha";
+      facets[key] = Array.from(map.keys()).sort(
+        sort === "numeric" ? (a, b) => Number(a) - Number(b) : undefined
+      );
+    });
+    return facets;
   }
 
-  private getStats(): SearchResult["stats"] {
+  private getStats(): Record<string, number> {
     if (this._stats) return this._stats;
-    this._stats = {
-      total: this.students.length,
-      active: this.statusIndex.get("Active")?.size ?? 0,
-      inactive: this.statusIndex.get("Inactive")?.size ?? 0,
-      departments: this.deptIndex.size,
+    const indexes: EngineIndexes<T> = {
+      records:    this.records,
+      totalCount: this.records.length,
+      facetIndex: this.facetIndex,
     };
+    this._stats = {};
+    for (const [key, fn] of Object.entries(this.config.stats)) {
+      this._stats[key] = fn(indexes);
+    }
     return this._stats;
   }
 
-  getStudentById(id: number): Student | null {
-    return this.students.find(s => s.id === id) ?? null;
-  }
-
-  isReady() { return this.initialized; }
-
+  isReady()    { return this.initialized; }
   invalidate() { this.initialized = false; }
 }
 
 declare global {
-  // eslint-disable-next-line no-var
-  var __studentEngine: StudentSearchEngine | undefined;
-  var __studentEngineFilePath: string | undefined;
-  var __studentEngineMtime: number | undefined;
+
+  var __engineRegistry: Map<string, GenericSearchEngine<any>> | undefined;
 }
 
-export function getSearchEngine(): StudentSearchEngine {
-  if (!global.__studentEngine) global.__studentEngine = new StudentSearchEngine();
-  return global.__studentEngine;
+function getRegistry(): Map<string, GenericSearchEngine<any>> {
+  if (!global.__engineRegistry) global.__engineRegistry = new Map();
+  return global.__engineRegistry;
 }
 
-export function getEngineFileMeta(): { filePath: string | null; mtime: number } {
-  return { filePath: global.__studentEngineFilePath ?? null, mtime: global.__studentEngineMtime ?? 0 };
-}
-
-export function setEngineFileMeta(filePath: string, mtime: number): void {
-  global.__studentEngineFilePath = filePath;
-  global.__studentEngineMtime = mtime;
+export function getEngine<T extends Record<string, unknown>>(name: string): GenericSearchEngine<T> {
+  const reg = getRegistry();
+  if (!reg.has(name)) reg.set(name, new GenericSearchEngine<T>());
+  return reg.get(name) as GenericSearchEngine<T>;
 }

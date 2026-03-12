@@ -1,81 +1,40 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { ensureEngineReady } from "@/lib/data-loader";
-import { getSearchEngine } from "@/lib/search-engine";
-import { Student } from "@/lib/types";
+import { studentLoaderConfig } from "@/lib/student-engine-config";
+import { getEngine } from "@/lib/search-engine";
+import { Student } from "@/lib/student-types";
 
 export const dynamic = "force-dynamic";
 
-const HEADERS = [
-  "Roll No", "Course", "Department", "Semester",
-  "Name", "Email", "Contact", "Status", "Subjects",
-];
 
-function studentToRow(s: Student): string[] {
-  return [s.rollNo, s.course, s.department, String(s.semester), s.name, s.email, s.contact, s.status, s.subjects];
-}
-
-function toCSV(students: Student[]): string {
-  const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
-  return [
-    HEADERS.map(escape).join(","),
-    ...students.map((s) => studentToRow(s).map(escape).join(",")),
-  ].join("\n");
-}
-
-function toTSV(students: Student[]): string {
-  return [
-    HEADERS.join("\t"),
-    ...students.map((s) => studentToRow(s).join("\t")),
-  ].join("\n");
-}
+const HEADERS = ["Roll No","Course","Department","Semester","Name","Email","Contact","Status","Subjects"];
+const toRow    = (s: Student) => [s.rollNo, s.course, s.department, String(s.semester), s.name, s.email, s.contact, s.status, s.subjects];
+const escape   = (v: string)  => `"${v.replace(/"/g, '""')}"`;
+const toCSV    = (rows: Student[]) => [HEADERS.map(escape).join(","), ...rows.map((s) => toRow(s).map(escape).join(","))].join("\n");
+const toTSV    = (rows: Student[]) => [HEADERS.join("\t"), ...rows.map((s) => toRow(s).join("\t"))].join("\n");
 
 export async function GET(req: NextRequest) {
   try {
-    await ensureEngineReady();
+    await ensureEngineReady(studentLoaderConfig);
+    const sp     = req.nextUrl.searchParams;
+    const format = sp.get("format") === "excel" ? "excel" : "csv";
 
-    const { searchParams } = req.nextUrl;
-    const format = searchParams.get("format") === "excel" ? "excel" : "csv";
+    const filters: Record<string, string> = {};
+    for (const k of ["department", "semester", "status", "course"]) { const v = sp.get(k); if (v) filters[k] = v; }
+    const columnFilters: Record<string, string> = {};
+    for (const [k, v] of sp.entries()) if (k.startsWith("col_") && v.trim()) columnFilters[k.slice(4)] = v;
 
-    const columnFilters: Partial<Record<keyof Student, string>> = {};
-    for (const [key, val] of searchParams.entries()) {
-      if (key.startsWith("col_") && val.trim()) {
-        columnFilters[key.slice(4) as keyof Student] = val;
-      }
-    }
-
-    const result = getSearchEngine().search({
-      query:      searchParams.get("q") ?? "",
-      department: searchParams.get("department") ?? "",
-      semester:   searchParams.get("semester") ?? "",
-      status:     searchParams.get("status") ?? "",
-      course:     searchParams.get("course") ?? "",
-      columnFilters,
-      page:       1,
-      rowsPerPage: 500000, // get everything
-      sortField:  (searchParams.get("sortField") as keyof Student) || undefined,
-      sortDir:    (searchParams.get("sortDir") as "asc" | "desc") || "asc",
+    const { data } = getEngine<Student>("students").search({
+      query: sp.get("q") ?? "", filters, columnFilters,
+      page: 1, rowsPerPage: 500000,
+      sortField: sp.get("sortField") ?? undefined,
+      sortDir:  (sp.get("sortDir") as "asc" | "desc") || "asc",
     });
 
-    if (format === "excel") {
-      const tsv = toTSV(result.data);
-      return new NextResponse(tsv, {
-        headers: {
-          "Content-Type": "application/vnd.ms-excel; charset=utf-8",
-          "Content-Disposition": `attachment; filename="students.xls"`,
-        },
-      });
-    } else {
-      const csv = toCSV(result.data);
-      return new NextResponse(csv, {
-        headers: {
-          "Content-Type": "text/csv; charset=utf-8",
-          "Content-Disposition": `attachment; filename="students.csv"`,
-        },
-      });
-    }
+    return format === "excel"
+      ? new NextResponse(toTSV(data), { headers: { "Content-Type": "application/vnd.ms-excel; charset=utf-8", "Content-Disposition": `attachment; filename="students.xls"` } })
+      : new NextResponse(toCSV(data), { headers: { "Content-Type": "text/csv; charset=utf-8",                "Content-Disposition": `attachment; filename="students.csv"` } });
   } catch (err) {
-    console.error("[/api/students/export]", err);
-    return NextResponse.json({ error: "Export failed" }, { status: 500 });
+    return NextResponse.json({ error: "Export failed", message: String(err) }, { status: 500 });
   }
 }

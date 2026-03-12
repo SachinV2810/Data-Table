@@ -1,5 +1,5 @@
 "use client";
-import { Student } from "@/lib/types";
+import { Student } from "@/lib/student-types";
 import { Mail, Phone, BookOpen, Building2, GraduationCap, Hash } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
@@ -26,10 +26,10 @@ const SEM_COLORS: Record<number, string> = {
 function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start gap-3 py-2">
-      <div className="mt-0.5 text-muted-foreground">{icon}</div>
+      <div className="mt-0.5 text-[var(--color-muted-foreground)]">{icon}</div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-muted-foreground font-medium mb-0.5">{label}</p>
-        <div className="text-sm font-semibold text-foreground break-all">{value}</div>
+        <p className="text-xs text-[var(--color-muted-foreground)] font-medium mb-0.5">{label}</p>
+        <div className="text-sm font-semibold text-[var(--color-foreground)] break-all">{value}</div>
       </div>
     </div>
   );
@@ -98,7 +98,7 @@ export function StudentDetailModal({ student, onClose }: StudentDetailModalProps
             <CardContent className="pt-4 pb-4">
               <div className="flex items-center gap-2 mb-3">
                 <BookOpen className="h-4 w-4 text-amber-500" />
-                <span className="text-sm font-semibold">Subjects <span className="text-muted-foreground font-normal">({subjectList.length})</span></span>
+                <span className="text-sm font-semibold">Subjects <span className="text-[var(--color-muted-foreground)] font-normal">({subjectList.length})</span></span>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {subjectList.map((subj, i) => {

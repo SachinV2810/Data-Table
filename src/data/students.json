@@ -96,6 +96,18 @@
     "status": "Active"
   },
   {
+    "id": 9000,
+    "rollNo": "HSC/2022/0008",
+    "course": "HSC",
+    "department": "CSE",
+    "semester": 5,
+    "name": "VINOD PATEL",
+    "email": "vinod.patel8@school.edu",
+    "contact": "9437978658",
+    "subjects": "Accountancy (HS) - ACOU, English (HS) - ENGL, Environmental Studies - EVS, Business Studies (HS) - BUST, Business Mathematics (HS) - BMS",
+    "status": "Active"
+  },
+  {
     "id": 9,
     "rollNo": "BA/2022/0009",
     "course": "BA",
@@ -11998,18 +12010,5 @@
     "contact": "7969663862",
     "subjects": "English (HS) - ENGL, Banking & Finance (HS) - BNKG, Economics (HS) - ECON, Alternative English (HS) - ALTE, Business Mathematics (HS) - BMS, Environmental Studies - EVS",
     "status": "Active"
-  },
-  {
-    "id": 1001,
-    "rollNo": "BCom/2024/1000",
-    "course": "BCom",
-    "department": "CSE",
-    "semester": 4,
-    "name": "Sachin Verma",
-    "email": "v.sachin1000@school.edu",
-    "contact": "7969663862",
-    "subjects": "English (HS) - ENGL, Banking & Finance (HS) - BNKG, Economics (HS) - ECON, Alternative English (HS) - ALTE, Business Mathematics (HS) - BMS, Environmental Studies - EVS",
-    "status": "Active"
   }
-
 ]

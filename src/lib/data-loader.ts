@@ -1,100 +1,99 @@
-
-
 import path from "path";
-import fs from "fs";
-import { Student } from "./types";
-import { getSearchEngine, getEngineFileMeta, setEngineFileMeta } from "./search-engine";
+import fs   from "fs";
+import { GenericSearchEngine, EngineConfig, getEngine } from "./search-engine";
 
-// Candidates in priority order
-const DATA_CANDIDATES = [
-  path.join(process.cwd(), "src/data/students-100k.json"),
-  path.join(process.cwd(), "src/data/students.json"),
-  // Vercel bundles files relative to project root
-  path.join(process.cwd(), ".next/server/src/data/students-100k.json"),
-  path.join(process.cwd(), ".next/server/src/data/students.json"),
-];
+declare global {
 
-let rebuildPromise: Promise<void> | null = null;
-
-// Cache the mtime check — only hit the disk every 2 seconds max
-let lastMtimeCheckAt = 0;
-let cachedMtime = 0;
-const MTIME_CACHE_TTL = 2000; // ms
-
-function resolveDataFile(): string | null {
-  for (const candidate of DATA_CANDIDATES) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
+  var __engineFileMeta: Map<string, { filePath: string; mtime: number }> | undefined;
+  var __engineRebuildPromise: Map<string, Promise<void>> | undefined;
 }
+
+function getMeta(name: string) {
+  if (!global.__engineFileMeta) global.__engineFileMeta = new Map();
+  return global.__engineFileMeta.get(name) ?? { filePath: "", mtime: 0 };
+}
+function setMeta(name: string, filePath: string, mtime: number) {
+  if (!global.__engineFileMeta) global.__engineFileMeta = new Map();
+  global.__engineFileMeta.set(name, { filePath, mtime });
+}
+function getRebuildMap() {
+  if (!global.__engineRebuildPromise) global.__engineRebuildPromise = new Map();
+  return global.__engineRebuildPromise;
+}
+
+const mtimeCache = new Map<string, { value: number; at: number }>();
+const MTIME_TTL  = 2000;
 
 function getFileMtime(filePath: string): number {
-  const now = Date.now();
-  if (now - lastMtimeCheckAt < MTIME_CACHE_TTL) {
-    return cachedMtime; // use cached value — skip disk hit
-  }
+  const cached = mtimeCache.get(filePath);
+  if (cached && Date.now() - cached.at < MTIME_TTL) return cached.value;
   try {
-    cachedMtime = fs.statSync(filePath).mtimeMs;
-    lastMtimeCheckAt = now;
-    return cachedMtime;
-  } catch {
-    return 0;
-  }
+    const value = fs.statSync(filePath).mtimeMs;
+    mtimeCache.set(filePath, { value, at: Date.now() });
+    return value;
+  } catch { return 0; }
 }
 
-async function loadAndBuild(filePath: string): Promise<void> {
-  console.log(`[DataLoader] Loading ${path.basename(filePath)}...`);
+export interface LoaderConfig<T extends Record<string, unknown>> {
+ 
+  name: string;
+ 
+  dataCandidates: string[];
+
+  engineConfig: EngineConfig<T>;
+}
+
+async function loadAndBuild<T extends Record<string, unknown>>(
+  filePath: string,
+  loaderConfig: LoaderConfig<T>
+): Promise<void> {
+  console.log(`[DataLoader:${loaderConfig.name}] Loading ${path.basename(filePath)}…`);
   const start = Date.now();
 
-  const raw = fs.readFileSync(filePath, "utf-8");
-  const students = JSON.parse(raw) as Student[];
+  const raw     = fs.readFileSync(filePath, "utf-8");
+  const records = JSON.parse(raw) as T[];
 
-  if (!Array.isArray(students) || students.length === 0) {
-    throw new Error(`[DataLoader] No valid records in ${filePath}`);
+  if (!Array.isArray(records) || records.length === 0) {
+    throw new Error(`[DataLoader:${loaderConfig.name}] No valid records in ${filePath}`);
   }
 
-  getSearchEngine().build(students);
-
-  // Persist file meta to global so it survives hot reloads
-  setEngineFileMeta(filePath, getFileMtime(filePath));
+  getEngine<T>(loaderConfig.name).build(records, loaderConfig.engineConfig);
+  setMeta(loaderConfig.name, filePath, getFileMtime(filePath));
 
   console.log(
-    `[DataLoader] ✓ ${students.length.toLocaleString()} students loaded from ` +
-    `${path.basename(filePath)} in ${Date.now() - start}ms`
+    `[DataLoader:${loaderConfig.name}] ✓ ${records.length.toLocaleString()} records loaded in ${Date.now() - start}ms`
   );
 }
 
-export async function ensureEngineReady(): Promise<void> {
-  const engine   = getSearchEngine();
-  const filePath = resolveDataFile();
+export async function ensureEngineReady<T extends Record<string, unknown>>(
+  loaderConfig: LoaderConfig<T>
+): Promise<GenericSearchEngine<T>> {
+  const { name, dataCandidates } = loaderConfig;
 
-  if (!filePath) {
-    throw new Error("[DataLoader] No student data file found. Expected src/data/students.json");
-  }
+  const filePath = dataCandidates.find((c) => fs.existsSync(c)) ?? null;
+  if (!filePath) throw new Error(`[DataLoader:${name}] No data file found. Tried: ${dataCandidates.join(", ")}`);
 
-  const currentMtime             = getFileMtime(filePath);
-  const { filePath: lastPath, mtime: lastMtime } = getEngineFileMeta();
+  const engine        = getEngine<T>(name);
+  const currentMtime  = getFileMtime(filePath);
+  const meta          = getMeta(name);
+  const fileChanged   = filePath !== meta.filePath || currentMtime !== meta.mtime;
+  const needsBuild    = !engine.isReady() || fileChanged;
 
-  // Key fix: always compare mtime, not just engine.isReady().
-  // engine.isReady() can return true even when the file has been updated,
-  // because the engine was built from the OLD version of the file.
-  const fileChanged = filePath !== lastPath || currentMtime !== lastMtime;
-  const needsBuild  = !engine.isReady() || fileChanged;
-
-  if (!needsBuild) return;
+  if (!needsBuild) return engine;
 
   if (fileChanged && engine.isReady()) {
-    console.log(`[DataLoader] Detected change in ${path.basename(filePath)} — rebuilding...`);
+    console.log(`[DataLoader:${name}] File changed — rebuilding…`);
   }
 
-  if (rebuildPromise) {
-    await rebuildPromise;
-    return;
+  const rebuilds = getRebuildMap();
+  if (rebuilds.has(name)) {
+    await rebuilds.get(name)!;
+    return engine;
   }
 
-  rebuildPromise = loadAndBuild(filePath).finally(() => {
-    rebuildPromise = null;
-  });
+  const promise = loadAndBuild(filePath, loaderConfig).finally(() => rebuilds.delete(name));
+  rebuilds.set(name, promise);
+  await promise;
 
-  await rebuildPromise;
+  return engine;
 }

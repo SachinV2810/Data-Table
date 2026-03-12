@@ -1,63 +1,45 @@
-
-
 import { NextRequest, NextResponse } from "next/server";
 import { ensureEngineReady } from "@/lib/data-loader";
-import { getSearchEngine } from "@/lib/search-engine";
-import { Student } from "@/lib/types";
+import { studentLoaderConfig } from "@/lib/student-engine-config";
+import { getEngine } from "@/lib/search-engine";
+import { Student } from "@/lib/student-types";
 
-export const dynamic = "force-dynamic"; // Never cache — always live data
+export const dynamic = "force-dynamic";
+
+// ─── Student engine config ────────────────────────────────────────────────────
+
+
+// ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   try {
-    await ensureEngineReady();
+    const engine = await ensureEngineReady(studentLoaderConfig);
+    const sp     = req.nextUrl.searchParams;
 
-    const { searchParams } = req.nextUrl;
+    const query      = sp.get("q")         ?? "";
+    const page       = Math.max(1, parseInt(sp.get("page")  ?? "1",  10));
+    const limit      = Math.min(500, Math.max(1, parseInt(sp.get("limit") ?? "10", 10)));
+    const sortField  = sp.get("sortField") ?? undefined;
+    const sortDir    = (sp.get("sortDir") as "asc" | "desc") || "asc";
 
-    const query      = searchParams.get("q") ?? "";
-    const department = searchParams.get("department") ?? "";
-    const semester   = searchParams.get("semester") ?? "";
-    const status     = searchParams.get("status") ?? "";
-    const course     = searchParams.get("course") ?? "";
-    const sortField  = (searchParams.get("sortField") as keyof Student | null) ?? undefined;
-    const sortDir    = (searchParams.get("sortDir") as "asc" | "desc") || "asc";
-    const page       = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10));
-    const limit      = Math.min(500, Math.max(1, parseInt(searchParams.get("limit") ?? "10", 10)));
-
-
-    const columnFilters: Partial<Record<keyof Student, string>> = {};
-    for (const [key, val] of searchParams.entries()) {
-      if (key.startsWith("col_") && val.trim()) {
-        const colKey = key.slice(4) as keyof Student;
-        columnFilters[colKey] = val;
-      }
+    // Named facet filters
+    const filters: Record<string, string> = {};
+    for (const key of ["department", "semester", "status", "course"]) {
+      const v = sp.get(key);
+      if (v) filters[key] = v;
     }
 
-    const engine = getSearchEngine();
-    const result = engine.search({
-      query,
-      department,
-      semester,
-      status,
-      course,
-      columnFilters,
-      page,
-      rowsPerPage: limit,
-      sortField,
-      sortDir,
-    });
+    // Column filters: col_<field>
+    const columnFilters: Record<string, string> = {};
+    for (const [key, val] of sp.entries()) {
+      if (key.startsWith("col_") && val.trim()) columnFilters[key.slice(4)] = val;
+    }
 
-    return NextResponse.json(result, {
-      status: 200,
-      headers: {
-        // Allow CDN/browser to cache GET responses briefly
-        "Cache-Control": "no-store",
-      },
-    });
+    const result = engine.search({ query, filters, columnFilters, page, rowsPerPage: limit, sortField, sortDir });
+
+    return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
-    console.error("[/api/students] Error:", err);
-    return NextResponse.json(
-      { error: "Internal server error", message: String(err) },
-      { status: 500 }
-    );
+    console.error("[/api/students]", err);
+    return NextResponse.json({ error: "Internal server error", message: String(err) }, { status: 500 });
   }
 }
