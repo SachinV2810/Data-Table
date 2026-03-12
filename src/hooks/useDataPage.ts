@@ -43,7 +43,7 @@ export function useDataPage<T>(params: UseDataPageParams): UseDataPageResult<T> 
   const [isLoading,  setIsLoading]  = useState(true);
   const [error,      setError]      = useState<string | null>(null);
 
-  const timer  = useRef<NodeJS.Timeout | null>(null);
+  const timer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abort  = useRef<AbortController | null>(null);
 
   const fetch_ = useCallback((p: UseDataPageParams) => {

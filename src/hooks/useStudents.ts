@@ -33,7 +33,7 @@ function buildUrl(params: UseStudentsParams): string {
   if (params.filters.course) sp.set("course", params.filters.course);
   sp.set("page", String(params.page));
   sp.set("limit", String(params.rowsPerPage));
-  if (params.sortField) sp.set("sortField", params.sortField);
+  if (params.sortField) sp.set("sortField", String(params.sortField));
   if (params.sortDir) sp.set("sortDir", params.sortDir);
 
   for (const [key, val] of Object.entries(params.columnFilters)) {
@@ -51,8 +51,7 @@ export function useStudents(params: UseStudentsParams): UseStudentsResult {
   const [stats, setStats] = useState<SearchResult<Student>["stats"] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortController = useRef<AbortController | null>(null);
 
   const fetchData = useCallback(
